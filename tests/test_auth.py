@@ -22,7 +22,7 @@ async def test_login_rejects_bad_password(client: AsyncClient) -> None:
 
 
 async def test_protected_route_requires_auth(client: AsyncClient) -> None:
-    resp = await client.get("/orders")
+    resp = await client.get("/items")
     assert resp.status_code == 401
     assert resp.json()["error"] == "unauthorized"
 

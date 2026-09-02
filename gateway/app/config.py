@@ -6,20 +6,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # JWT Authentication
     jwt_secret: str = "change-me-in-production-use-a-long-random-string"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
 
+    # Redis configuration
     redis_url: str = "redis://localhost:6379/0"
 
+    # Rate limiting
     rate_limit_requests: int = 10
     rate_limit_window_seconds: int = 60
-    # "closed" rejects traffic when Redis is unavailable; "open" allows it.
+    # "closed" rejects traffic (503) when Redis is unavailable; "open" allows it through.
     rate_limit_fail_mode: str = "closed"
 
-    orders_upstream: str = "http://localhost:8001"
-    inventory_upstream: str = "http://localhost:8002"
-    users_upstream: str = "http://localhost:8003"
+    # Upstream service endpoints
+    # To add your own upstream services, add new URL settings here and wire them in router.py
+    example_upstream: str = "http://localhost:8001"
 
     log_level: str = "INFO"
 

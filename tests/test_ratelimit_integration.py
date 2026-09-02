@@ -15,9 +15,7 @@ async def test_nth_request_returns_429() -> None:
         rate_limit_requests=3,
         rate_limit_window_seconds=60,
         rate_limit_fail_mode="closed",
-        orders_upstream="http://orders",
-        inventory_upstream="http://inventory",
-        users_upstream="http://users",
+        example_upstream="http://example",
     )
     app = create_app(settings, redis=FakeRedis(), http_client=FakeUpstream())  # type: ignore[arg-type]
     transport = ASGITransport(app=app)
@@ -29,7 +27,7 @@ async def test_nth_request_returns_429() -> None:
         statuses = []
         last = None
         for _ in range(4):
-            last = await client.get("/orders", headers=headers)
+            last = await client.get("/items", headers=headers)
             statuses.append(last.status_code)
 
         assert statuses[:3] == [200, 200, 200]
@@ -48,21 +46,19 @@ async def test_unauthenticated_does_not_consume_quota() -> None:
         jwt_secret="test-secret-please-use-at-least-32b",
         rate_limit_requests=1,
         rate_limit_window_seconds=60,
-        orders_upstream="http://orders",
-        inventory_upstream="http://inventory",
-        users_upstream="http://users",
+        example_upstream="http://example",
     )
     redis = FakeRedis()
     app = create_app(settings, redis=redis, http_client=FakeUpstream())  # type: ignore[arg-type]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         for _ in range(5):
-            denied = await client.get("/orders")
+            denied = await client.get("/items")
             assert denied.status_code == 401
 
         login = await client.post("/auth/login", json={"username": "alice", "password": "alicepass"})
         token = login.json()["access_token"]
-        ok = await client.get("/orders", headers={"Authorization": f"Bearer {token}"})
+        ok = await client.get("/items", headers={"Authorization": f"Bearer {token}"})
         assert ok.status_code == 200
 
 
@@ -71,9 +67,7 @@ async def test_fail_closed_when_redis_down() -> None:
         jwt_secret="test-secret-please-use-at-least-32b",
         rate_limit_requests=10,
         rate_limit_fail_mode="closed",
-        orders_upstream="http://orders",
-        inventory_upstream="http://inventory",
-        users_upstream="http://users",
+        example_upstream="http://example",
     )
     redis = FakeRedis(fail=True)
     app = create_app(settings, redis=redis, http_client=FakeUpstream())  # type: ignore[arg-type]
@@ -81,6 +75,6 @@ async def test_fail_closed_when_redis_down() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         login = await client.post("/auth/login", json={"username": "alice", "password": "alicepass"})
         token = login.json()["access_token"]
-        resp = await client.get("/orders", headers={"Authorization": f"Bearer {token}"})
+        resp = await client.get("/items", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 503
         assert resp.json()["error"] == "service_unavailable"

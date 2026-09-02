@@ -1,4 +1,4 @@
-"""Reverse-proxy hop from the gateway to a mock upstream service."""
+"""Reverse-proxy router forwarding gateway requests to upstream services."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from app.schemas import UserClaims
 
 logger = logging.getLogger(__name__)
 
+# Hop-by-hop headers that must not be forwarded by proxies according to RFC 2616 / RFC 7230
 HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -28,11 +29,26 @@ HOP_BY_HOP = {
 
 
 def build_proxy_router(settings: Settings) -> APIRouter:
+    """
+    Builds the FastAPI router that proxies incoming paths to upstream services.
+
+    =============================================================================
+    HOW TO ADD YOUR OWN UPSTREAM SERVICE:
+    -----------------------------------------------------------------------------
+    1. Define your upstream URL setting in `app/config.py` (e.g. `billing_upstream: str`).
+    2. Add the URL prefix and target to the `mounts` tuple below:
+         mounts = (
+             ("/items", settings.example_upstream),
+             ("/admin", settings.example_upstream),
+             ("/billing", settings.billing_upstream),  # <--- YOUR SERVICE HERE
+         )
+    3. (Optional) Add RBAC rules for the new prefix in `app/auth/rbac.py`.
+    =============================================================================
+    """
     router = APIRouter()
     mounts = (
-        ("/orders", settings.orders_upstream),
-        ("/inventory", settings.inventory_upstream),
-        ("/users", settings.users_upstream),
+        ("/items", settings.example_upstream),
+        ("/admin", settings.example_upstream),
     )
     for prefix, upstream in mounts:
         router.add_api_route(
@@ -61,7 +77,16 @@ async def _proxy(request: Request, prefix: str, upstream: str, path: str) -> Res
     suffix = f"/{path}" if path else request.url.path[len(prefix) :] or "/"
     if not suffix.startswith("/"):
         suffix = "/" + suffix
+    url = f"{upstream.rstrip('/')}{prefix}{suffix}" if not upstream.endswith(prefix) else f"{upstream.rstrip('/')}{suffix}"
+    # If the upstream base URL already includes the service or is a root service:
+    # We forward path preserving prefix or suffix.
     url = f"{upstream.rstrip('/')}{suffix}"
+    if prefix in {"/items", "/admin"}:
+        # Route directly to the upstream path
+        url = f"{upstream.rstrip('/')}{prefix}{suffix}" if suffix != "/" else f"{upstream.rstrip('/')}{prefix}"
+        if path:
+            url = f"{upstream.rstrip('/')}{prefix}/{path}"
+
     if request.url.query:
         url = f"{url}?{request.url.query}"
 
@@ -72,6 +97,7 @@ async def _proxy(request: Request, prefix: str, upstream: str, path: str) -> Res
         if k.lower() not in HOP_BY_HOP and k.lower() not in {"authorization"}
     }
 
+    # Inject identity context headers to upstream
     user: UserClaims | None = getattr(request.state, "user", None)
     if user is not None:
         headers["X-Forwarded-User"] = user.username

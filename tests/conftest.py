@@ -11,7 +11,7 @@ from tests.fake_redis import FakeRedis
 
 
 class FakeUpstream:
-    """Stand-in for mock microservices during gateway tests."""
+    """Stand-in for upstream microservices during gateway tests."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -19,12 +19,10 @@ class FakeUpstream:
     async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         self.calls.append((method, url))
         request = httpx.Request(method, url)
-        if "/users" in url:
-            payload = {"users": [{"id": "usr_alice", "username": "alice"}]}
-        elif "/inventory" in url:
-            payload = {"items": [{"sku": "SKU-WIDGET", "on_hand": 42}]}
+        if "/admin" in url:
+            payload = {"metrics": {"status": "ok", "uptime_seconds": 3600}}
         else:
-            payload = {"orders": [{"id": "ord_1001", "status": "shipped"}]}
+            payload = {"items": [{"id": "item_101", "name": "Cloud Server Pro", "status": "active"}]}
         return httpx.Response(200, json=payload, request=request)
 
     async def aclose(self) -> None:
@@ -39,9 +37,7 @@ def settings() -> Settings:
         rate_limit_requests=5,
         rate_limit_window_seconds=60,
         rate_limit_fail_mode="closed",
-        orders_upstream="http://orders",
-        inventory_upstream="http://inventory",
-        users_upstream="http://users",
+        example_upstream="http://example",
     )
 
 

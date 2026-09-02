@@ -15,15 +15,13 @@ A **single HTTP entry point** (`gateway` on port 8000) that:
 1. Authenticates the caller (JWT from `POST /auth/login`, or `X-API-Key`)
 2. Authorizes the call (role vs path vs HTTP method)
 3. Rate-limits **per identity** using Redis (sliding window, 10 req / 60 s by default)
-4. Reverse-proxies the request to a mock microservice by URL prefix
+4. Reverse-proxies the request to an upstream microservice by URL prefix
 
 Mock backends are not the product. They exist so the gateway has something real to route to:
 
 | Prefix         | Compose service     | Upstream (in Docker)              | App |
 |----------------|---------------------|-----------------------------------|-----|
-| `/orders`      | `service_orders`    | `http://service_orders:8001`      | `services/orders/app/main.py` |
-| `/inventory`   | `service_inventory` | `http://service_inventory:8002`   | `services/inventory/app/main.py` |
-| `/users`       | `service_users`     | `http://service_users:8003`       | `services/users/app/main.py` |
+| `/items`, `/admin` | `example_service` | `http://example_service:8001` | `services/example_service/app/main.py` |
 
 Redis holds **rate-limit state only** (sorted sets). It is not a session store, not a user DB, not a cache of API responses.
 
@@ -34,11 +32,11 @@ Companies do not want every microservice to re-implement auth, quotas, and routi
 - **Protect backends** from abusive or buggy clients (DDoS-ish floods, retry storms, one tenant starving another).
 - **Meter usage** for API products (“10 requests per minute per API key”).
 - **Enforce who can call what** without putting JWT parsing in every service.
-- **Give clients one URL** instead of discovering three internal ports.
+- **Give clients one URL** instead of discovering internal ports.
 
 A recruiter-friendly one-liner:
 
-> “I built a FastAPI gateway that authenticates with JWT, enforces RBAC, and rate-limits with an atomic Redis sliding window so multiple gateway workers cannot over-admit. Mock services sit behind it so the proxy path is real, not a stub.”
+> “I built a FastAPI gateway that authenticates with JWT, enforces RBAC, and rate-limits with an atomic Redis sliding window so multiple gateway workers cannot over-admit. An example microservice sits behind it so the proxy path is real, not a stub.”
 
 ### Why a company would build this (vs buy Kong/Envoy)
 
@@ -57,14 +55,12 @@ Client
 gateway:8000     FastAPI  (auth → RBAC → limiter → proxy or local route)
   │
   ├── redis:6379          Redis 7, no AOF/RDB persistence (ephemeral limiter state)
-  ├── service_orders:8001
-  ├── service_inventory:8002
-  └── service_users:8003
+  └── example_service:8001
 ```
 
-- Gateway `depends_on` Redis **healthy** (`redis-cli ping`) and the three services **started** (not necessarily healthy).
+- Gateway `depends_on` Redis **healthy** (`redis-cli ping`) and `example_service` **started**.
 - Redis command: `redis-server --save "" --appendonly no` — if Redis restarts, **all windows reset**. That is intentional for a demo limiter; production often still treats limiter state as disposable, but might use replication.
-- Compose DNS: gateway talks to `redis://redis:6379/0` and `http://service_orders:8001`, not `localhost`.
+- Compose DNS: gateway talks to `redis://redis:6379/0` and `http://example_service:8001`, not `localhost`.
 
 ### Code layout (what lives where)
 
@@ -72,17 +68,18 @@ gateway:8000     FastAPI  (auth → RBAC → limiter → proxy or local route)
 gateway/app/main.py                 create_app, lifespan, /health, /auth/login, /auth/me
 gateway/app/config.py               Settings from env
 gateway/app/errors.py               JSON envelope {"error","detail","status_code"}
-gateway/app/auth/users.py           In-memory alice/bob + API keys
+gateway/app/auth/users.py           In-memory alice/bob seed accounts + API keys
 gateway/app/auth/jwt.py             HS256 create/decode
 gateway/app/auth/rbac.py            is_allowed(role, method, path)
 gateway/app/middleware/auth.py      AuthMiddleware (auth + RBAC)
 gateway/app/middleware/ratelimit.py RateLimitMiddleware
 gateway/app/limiter/sliding_window.py  Lua + SlidingWindowRateLimiter.hit
 gateway/app/proxy/router.py         httpx reverse proxy
+services/example_service/app/main.py Upstream FastAPI microservice (:8001)
 tests/fake_redis.py                 Python replica of the Lua semantics
 ```
 
-### End-to-end request flow (authenticated `GET /orders`)
+### End-to-end request flow (authenticated `GET /items`)
 
 Starlette runs middleware in **reverse registration order**. In `create_app` (`main.py`):
 
@@ -94,10 +91,10 @@ app.add_middleware(AuthMiddleware, settings=settings)       # registered last  �
 **Inbound:**
 
 1. **`AuthMiddleware.dispatch`** (`middleware/auth.py`)
-   - Path `/orders` is not public, method is not `OPTIONS`.
+   - Path `/items` is not public, method is not `OPTIONS`.
    - `_authenticate`: no `X-API-Key` → parse `Authorization: Bearer …` → `decode_access_token` in `auth/jwt.py`.
    - On success: `request.state.user = UserClaims(...)`, `request.state.api_key = request.headers.get("x-api-key")` (usually `None` for JWT-only).
-   - `is_allowed(claims, "GET", "/orders")` in `auth/rbac.py` → `True` for both `admin` and `user`.
+   - `is_allowed(claims, "GET", "/items")` in `auth/rbac.py` → `True` for both `admin` and `user`.
    - `await call_next(request)` — does **not** touch Redis.
 
 2. **`RateLimitMiddleware.dispatch`** (`middleware/ratelimit.py`)
@@ -108,8 +105,8 @@ app.add_middleware(AuthMiddleware, settings=settings)       # registered last  �
    - If admitted: `call_next`, then attach `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
    - If rejected: **never calls the route**; returns 429 + `Retry-After`.
 
-3. **Route match** — `build_proxy_router` registered paths `/orders` and `/orders/{path:path}`.
-   - `_proxy` strips the `/orders` prefix, builds `http://service_orders:8001/` (or `/ord_1001`, etc.).
+3. **Route match** — `build_proxy_router` registered paths `/items`, `/items/{path:path}`, `/admin`, `/admin/{path:path}`.
+   - `_proxy` forwards request to `http://example_service:8001/items` (or `/admin/metrics`, etc.).
    - Strips hop-by-hop headers and **`Authorization`** so the JWT is not forwarded.
    - Adds `X-Forwarded-User`, `X-Forwarded-User-Id`, `X-Forwarded-Role`.
    - `httpx.AsyncClient.request` (timeout 10s, created in `lifespan`).
@@ -126,7 +123,7 @@ app.add_middleware(AuthMiddleware, settings=settings)       # registered last  �
 
 ### Why this structure
 
-- **Gateway owns policy**; mock services stay dumb JSON. That matches how real orgs split “edge” vs “domain.”
+- **Gateway owns policy**; upstream services stay dumb JSON. That matches how real orgs split “edge” vs “domain.”
 - **Redis beside the gateway**, not inside each service, so two gateway replicas share one counter (distributed limiter).
 - **httpx client in lifespan**, not per request, so TCP connections to upstreams can be reused.
 
@@ -175,7 +172,7 @@ Requirement implemented in `main.py` docstring: **401/403 never increment the wi
 - Quota is **per identity** (`rl:user:…` / `rl:apikey:…`), not per IP.
 - If you limited **before** auth, you would either key by IP (different product) or key by a token you have not validated (garbage tokens would need a bucket too).
 - An attacker with no token **must not** burn Alice’s quota.
-- **RBAC lives in the same middleware as auth**, so **403 also skips Redis**. Bob hammering `POST /orders` does not consume his GET quota. That is a deliberate extra: the written requirement was only “after auth”; this implementation also skips unauthorized traffic.
+- **RBAC lives in the same middleware as auth**, so **403 also skips Redis**. Bob hammering `POST /items` does not consume his GET quota. That is a deliberate extra: the written requirement was only “after auth”; this implementation also skips unauthorized traffic.
 
 Starlette gotcha to say out loud: **last `add_middleware` runs first.** If you reverse the two lines in `create_app`, you silently invert the pipeline.
 
@@ -187,7 +184,7 @@ Starlette gotcha to say out loud: **last `add_middleware` runs first.** If you r
 - Redis is kept for **rate limits**, not sessions — one tool, one job.
 - Trade-off: **no revocation**. Stolen token works until `exp` (default 60 minutes, `JWT_EXPIRE_MINUTES`). Production would add `jti` + a denylist, or short-lived access + refresh, or introspection (OAuth).
 
-Passwords in `users.py` are **plaintext**. Say that before they do: “demo IdP; production is bcrypt + user service.”
+Passwords in `users.py` are **plaintext**. Say that before they do: “demo seed accounts; production is bcrypt/Argon2 + external identity provider.”
 
 ### 3.6 Fail-closed vs fail-open (`RATE_LIMIT_FAIL_MODE`)
 
@@ -195,14 +192,14 @@ Passwords in `users.py` are **plaintext**. Say that before they do: “demo IdP;
 
 On Redis error (`RedisError` or `OSError`, which includes `ConnectionError` from `FakeRedis`):
 
-- **closed:** 503 `service_unavailable`, body `Rate limiter backend unavailable`. Upstream never sees the request. **Protects mock services.**
+- **closed:** 503 `service_unavailable`, body `Rate limiter backend unavailable`. Upstream never sees the request. **Protects upstream services.**
 - **open:** log warning, `call_next` **without** incrementing. Availability over enforcement.
 
 If the limiter object itself is missing: same closed/open split (`Rate limiter unavailable`).
 
-`GET /health` is always public: `redis` field `up`/`down`; `status` is `"ok"` if Redis pings **or** fail-open; `"degraded"` if fail-closed **and** ping fails. Health does **not** 503 just because Redis is down — load balancers can still mark the process alive while `/orders` 503s.
+`GET /health` is always public: `redis` field `up`/`down`; `status` is `"ok"` if Redis pings **or** fail-open; `"degraded"` if fail-closed **and** ping fails. Health does **not** 503 just because Redis is down — load balancers can still mark the process alive while `/items` 503s.
 
-**Why default closed:** this gateway’s job is protection. Fail-open turns a Redis outage into unbounded load on orders/inventory/users. Fail-open is the right call for a paid API where **availability SLO** beats fair throttling, **and** you have other shedding.
+**Why default closed:** this gateway’s job is protection. Fail-open turns a Redis outage into unbounded load on downstream backends. Fail-open is the right call for a paid API where **availability SLO** beats fair throttling, **and** you have other shedding.
 
 ### 3.7 Other choices in *this* code
 
@@ -212,13 +209,13 @@ If the limiter object itself is missing: same closed/open split (`Rate limiter u
 
 **Login is unauthenticated and unmetered.** Credential stuffing against `POST /auth/login` is not limited. Real systems rate-limit login by IP **and** username.
 
-**Proxy does not forward `Authorization`.** Backends trust `X-Forwarded-Role`. Compose **publishes 8001–8003**, so a client can bypass the gateway. Production: private network only, or mTLS, or the backends re-validate.
+**Proxy does not forward `Authorization`.** Backends trust `X-Forwarded-Role`. Compose **publishes 8001**, so a client can bypass the gateway. Production: private network only, or mTLS, or the backends re-validate.
 
 **Hop-by-hop headers stripped** (`proxy/router.py` `HOP_BY_HOP`) so `Transfer-Encoding` etc. are not blindly copied (HTTP/1.1 proxy hygiene).
 
 **httpx timeout 10 seconds.** Slow upstream holds a gateway worker that long. No retry, no circuit breaker.
 
-**RBAC is prefix + method, not resource ACL.** `user` cannot touch `/users*` at all; writes are `POST/PUT/PATCH/DELETE`. `GET/HEAD/OPTIONS` on `/orders` and `/inventory` allowed. Unknown roles → deny. `admin` → allow **everything** including `/auth/me`.
+**RBAC is prefix + method, not resource ACL.** `user` cannot touch `/admin*` at all; writes are `POST/PUT/PATCH/DELETE`. `GET/HEAD/OPTIONS` on `/items` allowed. Unknown roles → deny. `admin` → allow **everything** including `/auth/me`.
 
 **OPTIONS is treated as public** in both middlewares (CORS preflight). There is **no CORSMiddleware** in the app — OPTIONS would still skip auth if a client sent it.
 
@@ -329,12 +326,12 @@ Evaluated **after** identity is known, **before** Redis.
 admin → True (all methods, all paths that reached this function)
 role not admin and not user → False
 /auth/me → True for user
-/users* → False for user
-/orders* or /inventory* → True iff method not in {POST, PUT, PATCH, DELETE}
+/admin* → False for user
+/items* → True iff method not in {POST, PUT, PATCH, DELETE}
 else False
 ```
 
-`HEAD` and `OPTIONS` on orders/inventory are allowed for `user` (not in `_WRITE_METHODS`). Gateway OPTIONS short-circuit in middleware happens **before** RBAC for **all** paths including `/users` — a `user` OPTIONS `/users` would skip auth entirely. Niche CORS quirk.
+`HEAD` and `OPTIONS` on `/items` are allowed for `user` (not in `_WRITE_METHODS`). Gateway OPTIONS short-circuit in middleware happens **before** RBAC for **all** paths including `/admin` — a `user` OPTIONS `/admin` would skip auth entirely. Niche CORS quirk.
 
 ---
 
@@ -361,7 +358,7 @@ else False
 | **Very large `limit`** | ZSET memory O(limit) per identity. |
 | **Redis Cluster** | Script uses **one key** (`KEYS[1]`). Cluster-safe. Multiple keys in one Lua would need hash tags. |
 | **`/health` when Redis down** | 200 with `redis: down` (fail-closed → `status: degraded`). Does not take the process out of rotation by itself. |
-| **Direct call to :8001** | Bypasses auth, RBAC, and limiter. Ports are published. |
+| **Direct call to :8001** | Bypasses auth, RBAC, and limiter. Ports are published in local/dev compose. |
 
 ---
 
@@ -379,7 +376,7 @@ What a senior engineer would flag vs Kong / Envoy / AWS API Gateway:
 6. **Login unmetered**; no IP throttling; no lockout.
 7. **Single Redis** — Sentinel/Cluster, timeouts, connection pool sizing, `SCRIPT LOAD` + `EVALSHA` instead of sending the full script every hit (this code sends the script body on **every** `eval`).
 8. **No observability** — no metrics (admits vs 429s vs Redis errors), no tracing, unstructured logs.
-9. **No per-route limits** — one global `RATE_LIMIT_REQUESTS` for all identities and all paths. Production: `alice` 1000/min on `/orders`, 10/min on `/users`.
+9. **No per-route limits** — one global `RATE_LIMIT_REQUESTS` for all identities and all paths. Production: `alice` 1000/min on `/items`, 10/min on `/admin`.
 10. **RBAC hardcoded** in `is_allowed`. Production: policy engine (OPA), method+path tables, tenants.
 11. **Starlette `BaseHTTPMiddleware`** — extra task per request; high-QPS gateways use pure ASGI or Envoy filters.
 12. **Quota spent before success** — 502 still counts. Decide product-wise.
@@ -417,14 +414,14 @@ Honest interview closer: “This is a correct **algorithm and middleware pipelin
 8. **Do 403s count?**  
    No. RBAC is inside `AuthMiddleware` before `call_next`.
 
-9. **How does Bob get 403 on `/users`?**  
-   `is_allowed`: role `user`, path startswith `/users` → False. `test_user_cannot_read_users_service`.
+9. **How does Bob get 403 on `/admin/metrics`?**  
+   `is_allowed`: role `user`, path startswith `/admin` → False. Covered by `test_user_cannot_access_admin_route`.
 
-10. **Can Bob POST `/orders`?**  
-    No. `_WRITE_METHODS`. `test_user_cannot_write_orders`.
+10. **Can Bob POST `/items`?**  
+    No. `_WRITE_METHODS` rejects `POST` on `/items` for role `user`. Covered by `test_user_cannot_write_items`.
 
 11. **What happens if Redis is down?**  
-    Default fail-closed 503. `RATE_LIMIT_FAIL_MODE=open` skips limiter. `test_fail_closed_when_redis_down`.
+    Default fail-closed 503. `RATE_LIMIT_FAIL_MODE=open` skips limiter. Covered by `test_fail_closed_when_redis_down`.
 
 12. **What JWT claims do you store?**  
     `sub`, `username`, `role`, `iat`, `exp`. Not the API key.
@@ -436,10 +433,10 @@ Honest interview closer: “This is a correct **algorithm and middleware pipelin
     Returns `request.state.user` without proxying. Still rate-limited.
 
 15. **How does routing work?**  
-    Prefix table in `build_proxy_router`; strip prefix; httpx to `ORDERS_UPSTREAM` etc.
+    Prefix table in `build_proxy_router`; forwards to `EXAMPLE_UPSTREAM` (or custom upstream).
 
 16. **Why strip `Authorization` toward upstream?**  
-    Internal services should not see the user JWT; they get `X-Forwarded-*`. (Also: those ports are published — mention that as a gap.)
+    Internal services should not see the user JWT; they get `X-Forwarded-*`.
 
 17. **What does `X-RateLimit-Reset` mean here?**  
     Unix second when the **oldest event still in the ZSET** plus `window_ms` elapses — i.e. when a slot frees if you are at the cap.
@@ -467,7 +464,7 @@ Hot path, need atomic check-and-increment, no need for durability of each hit. R
 They do not store counts locally. Every `hit()` is Redis `EVAL` on the same key. Scale gateways; scale Redis separately. Two instances **cannot** over-admit because of Lua, **not** because of sticky sessions.
 
 **“Could they over-admit anyway?”**  
-Clock skew; fail-open; hitting backends directly on 8001–8003; different identities (JWT vs API key → different Redis keys for the same human); login not limited.
+Clock skew; fail-open; hitting backends directly on 8001; different identities (JWT vs API key → different Redis keys for the same human); login not limited.
 
 **“If X-API-Key and Bearer are both sent?”**  
 Key wins. Bad key → 401 ignoring JWT. Good key → quota on `rl:apikey:…`.
@@ -497,7 +494,7 @@ When full, the next free slot is when the **oldest** event leaves, which can be 
 For a single gateway with a server-side secret, yes. Multiple independently deployed services verifying tokens → asymmetric keys. Secret in Compose default is a **known string** — must change in real deploys.
 
 **“Can I forge `X-Forwarded-Role: admin` on the gateway?”**  
-Gateway **overwrites** those headers from JWT/API key after stripping hop-by-hop, but a client can still send them; they are set from `request.state.user` so the gateway’s values win **on the outbound httpx call**. Forging them **to the gateway** does not grant admin. Forging them **to port 8001** does, because orders service ignores auth.
+Gateway **overwrites** those headers from JWT/API key after stripping hop-by-hop, but a client can still send them; they are set from `request.state.user` so the gateway’s values win **on the outbound httpx call**. Forging them **to the gateway** does not grant admin. Forging them **to port 8001** does, because example service ignores auth.
 
 **“Starlette middleware order if I add a logger last?”**  
 Last added = first on the way in. Always re-state that; people get it wrong.
@@ -519,13 +516,13 @@ Limit:        10 / 60s  (env)
 Redis:        ZSET  score=ms  member=ms:uuid  EVAL atomic
 Identity:     rl:user:{id}  or  rl:apikey:{sha256[:24]}
 API key:      wins over JWT if header present
-RBAC:         admin=all; user=GET orders+inventory; no /users; no writes
+RBAC:         admin=all; user=GET /items; no /admin; no writes
 Fail Redis:   default 503 (RATE_LIMIT_FAIL_MODE=closed)
 Upstream down: 502, quota already used
 401/403:      no Redis
 429:          no ZADD, Retry-After + X-RateLimit-*
 Login/health: public, no limiter
-Users:        alice/alicepass admin; bob/bobpass user
+Users:        alice/alicepass admin; bob/bobpass user (demo seed accounts)
 ```
 
 When they ask “tell me about a systems project,” walk this sheet top to bottom, then offer to draw the Lua steps on a whiteboard.

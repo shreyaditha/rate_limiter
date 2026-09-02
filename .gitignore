@@ -1,10 +1,19 @@
+# Python bytecode & environments
 __pycache__/
 *.py[cod]
 *$py.class
 .Python
 .venv/
 venv/
+env/
+ENV/
+
+# Environment variables & secrets (prevent accidental credential leaks)
 .env
+.env.*
+!.env.example
+
+# Testing & quality caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -13,8 +22,15 @@ htmlcov/
 *.egg-info/
 dist/
 build/
+
+# IDE / Editor folders
 .idea/
 .vscode/
+*.swp
+*.swo
+
+# Local runtime logs and process pids
 *.log
-.tools/
 .run/
+.tools/
+dump.rdb

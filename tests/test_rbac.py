@@ -10,44 +10,46 @@ async def _token(client: AsyncClient, username: str, password: str) -> str:
     return resp.json()["access_token"]
 
 
-async def test_user_cannot_read_users_service(client: AsyncClient) -> None:
+async def test_user_cannot_access_admin_route(client: AsyncClient) -> None:
     token = await _token(client, "bob", "bobpass")
-    resp = await client.get("/users", headers={"Authorization": f"Bearer {token}"})
+    resp = await client.get("/admin/metrics", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 403
     body = resp.json()
     assert body["error"] == "forbidden"
     assert body["status_code"] == 403
 
 
-async def test_user_cannot_write_orders(client: AsyncClient) -> None:
+async def test_user_cannot_write_items(client: AsyncClient) -> None:
     token = await _token(client, "bob", "bobpass")
     resp = await client.post(
-        "/orders",
+        "/items",
         headers={"Authorization": f"Bearer {token}"},
-        json={"sku": "SKU-WIDGET", "qty": 1},
+        json={"name": "Widget", "category": "hardware", "price": 10.0},
     )
     assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"] == "forbidden"
 
 
-async def test_user_can_read_orders(client: AsyncClient) -> None:
+async def test_user_can_read_items(client: AsyncClient) -> None:
     token = await _token(client, "bob", "bobpass")
-    resp = await client.get("/orders", headers={"Authorization": f"Bearer {token}"})
+    resp = await client.get("/items", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
-    assert "orders" in resp.json()
+    assert "items" in resp.json()
 
 
-async def test_admin_can_read_users(client: AsyncClient) -> None:
+async def test_admin_can_access_admin_route(client: AsyncClient) -> None:
     token = await _token(client, "alice", "alicepass")
-    resp = await client.get("/users", headers={"Authorization": f"Bearer {token}"})
+    resp = await client.get("/admin/metrics", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
-    assert "users" in resp.json()
+    assert "metrics" in resp.json()
 
 
-async def test_admin_can_write_inventory(client: AsyncClient) -> None:
+async def test_admin_can_write_items(client: AsyncClient) -> None:
     token = await _token(client, "alice", "alicepass")
     resp = await client.post(
-        "/inventory/restock",
+        "/items",
         headers={"Authorization": f"Bearer {token}"},
-        json={"sku": "SKU-WIDGET", "qty": 5},
+        json={"name": "Widget", "category": "hardware", "price": 10.0},
     )
     assert resp.status_code == 200

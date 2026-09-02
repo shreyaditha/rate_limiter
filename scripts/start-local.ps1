@@ -1,5 +1,5 @@
-# Local full-stack runner (no Docker required).
-# Starts Redis + 3 mock services + gateway, then prints demo curls.
+# Local full-stack runner for Windows PowerShell (no Docker required).
+# Starts Redis + example_service + gateway.
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -71,7 +71,6 @@ $ErrorActionPreference = "Stop"
 
 # Start Redis if not already running.
 if (-not (Test-Port 6379)) {
-    # Ensure a local redis.conf exists (portable Redis under .tools).
     $RedisConf = Join-Path $Root ".tools\redis\rate-limiter.conf"
     if (-not (Test-Path $RedisConf)) {
         @"
@@ -99,21 +98,11 @@ $env:REDIS_URL = "redis://127.0.0.1:6379/0"
 $env:RATE_LIMIT_REQUESTS = "10"
 $env:RATE_LIMIT_WINDOW_SECONDS = "60"
 $env:RATE_LIMIT_FAIL_MODE = "closed"
-$env:ORDERS_UPSTREAM = "http://127.0.0.1:8001"
-$env:INVENTORY_UPSTREAM = "http://127.0.0.1:8002"
-$env:USERS_UPSTREAM = "http://127.0.0.1:8003"
+$env:EXAMPLE_UPSTREAM = "http://127.0.0.1:8001"
 
-Start-LoggedProcess -Name "orders" -FilePath $Python -ArgumentList @(
+Start-LoggedProcess -Name "example_service" -FilePath $Python -ArgumentList @(
     "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8001"
-) -WorkingDirectory (Join-Path $Root "services\orders") | Out-Null
-
-Start-LoggedProcess -Name "inventory" -FilePath $Python -ArgumentList @(
-    "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8002"
-) -WorkingDirectory (Join-Path $Root "services\inventory") | Out-Null
-
-Start-LoggedProcess -Name "users" -FilePath $Python -ArgumentList @(
-    "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8003"
-) -WorkingDirectory (Join-Path $Root "services\users") | Out-Null
+) -WorkingDirectory (Join-Path $Root "services\example_service") | Out-Null
 
 Start-LoggedProcess -Name "gateway" -FilePath $Python -ArgumentList @(
     "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"
@@ -122,8 +111,6 @@ Start-LoggedProcess -Name "gateway" -FilePath $Python -ArgumentList @(
 Write-Host "Waiting for services..."
 $ok = @(
     (Wait-Http "http://127.0.0.1:8001/health"),
-    (Wait-Http "http://127.0.0.1:8002/health"),
-    (Wait-Http "http://127.0.0.1:8003/health"),
     (Wait-Http "http://127.0.0.1:8000/health")
 )
 if ($ok -contains $false) {
@@ -134,11 +121,9 @@ if ($ok -contains $false) {
 
 Write-Host ""
 Write-Host "FULL STACK IS UP"
-Write-Host "  Gateway:   http://127.0.0.1:8000/docs"
-Write-Host "  Orders:    http://127.0.0.1:8001"
-Write-Host "  Inventory: http://127.0.0.1:8002"
-Write-Host "  Users:     http://127.0.0.1:8003"
-Write-Host "  Redis:     127.0.0.1:6379"
+Write-Host "  Gateway:          http://127.0.0.1:8000/docs"
+Write-Host "  Example Service:  http://127.0.0.1:8001"
+Write-Host "  Redis:            127.0.0.1:6379"
 Write-Host ""
 Write-Host "Stop with:  .\scripts\stop-local.ps1"
 Write-Host "Demo with:  .\scripts\demo.ps1"

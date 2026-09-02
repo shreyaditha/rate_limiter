@@ -15,12 +15,12 @@ function Stop-PidFile([string]$Name) {
     Remove-Item $file -Force -ErrorAction SilentlyContinue
 }
 
-foreach ($name in @("gateway", "orders", "inventory", "users", "redis")) {
+foreach ($name in @("gateway", "example_service", "redis")) {
     Stop-PidFile $name
 }
 
 # Also clear anything still bound to our ports.
-foreach ($port in 8000, 8001, 8002, 8003, 6379) {
+foreach ($port in 8000, 8001, 6379) {
     $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     foreach ($c in $conns) {
         Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
