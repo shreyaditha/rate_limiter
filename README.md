@@ -15,7 +15,7 @@ A high-performance **FastAPI API Gateway** featuring:
 
 ---
 
-## 🏛️ Architecture
+##  Architecture
 
 ```
                       ┌──────────────────────────────────────────────┐
@@ -43,7 +43,7 @@ FastAPI / Starlette executes middleware in reverse addition order (**last-added 
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Option 1: Docker Compose (Cross-Platform, Recommended)
 
@@ -104,7 +104,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🔑 Demo Accounts
+##  Demo Accounts
 
 > [!NOTE]
 > **Demo Seed Accounts Only**: The credentials below are hardcoded in `gateway/app/auth/users.py` strictly for local testing, CI, and evaluation. In production, replace the in-memory store with an external identity provider (e.g., Auth0, Cognito, Keycloak, or Postgres/bcrypt).
@@ -118,7 +118,7 @@ Default rate limit quota: **10 requests per 60 seconds** per identity.
 
 ---
 
-## ⚙️ Environment Variables
+##  Environment Variables
 
 Copy `.env.example` to `.env` to customize settings:
 
@@ -140,7 +140,7 @@ cp .env.example .env
 
 ---
 
-## 🛠️ Step-by-Step Guide: Adding Your Own Upstream Service
+##  Step-by-Step Guide: Adding Your Own Upstream Service
 
 Adding a new microservice behind the gateway takes 4 simple steps:
 
@@ -252,7 +252,7 @@ X-RateLimit-Reset: 1788356369
 
 ---
 
-## 🧪 Running Tests
+##  Running Tests
 
 Run the complete test suite locally using `pytest`:
 
