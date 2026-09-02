@@ -1,0 +1,74 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  service_orders:
+    build:
+      context: .
+      dockerfile: services/orders/Dockerfile
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  service_inventory:
+    build:
+      context: .
+      dockerfile: services/inventory/Dockerfile
+    ports:
+      - "8002:8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  service_users:
+    build:
+      context: .
+      dockerfile: services/users/Dockerfile
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-use-a-long-random-string}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-10}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_FAIL_MODE: ${RATE_LIMIT_FAIL_MODE:-closed}
+      ORDERS_UPSTREAM: http://service_orders:8001
+      INVENTORY_UPSTREAM: http://service_inventory:8002
+      USERS_UPSTREAM: http://service_users:8003
+    depends_on:
+      redis:
+        condition: service_healthy
+      service_orders:
+        condition: service_started
+      service_inventory:
+        condition: service_started
+      service_users:
+        condition: service_started

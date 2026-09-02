@@ -1,0 +1,142 @@
+{
+  "info": {
+    "name": "Distributed Rate Limiter / API Gateway",
+    "description": "Login, JWT/API-key auth, RBAC, proxy routes, and sliding-window rate limits.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "Login as alice (admin)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var json = pm.response.json();",
+              "if (json.access_token) { pm.collectionVariables.set('token', json.access_token); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\": \"alice\", \"password\": \"alicepass\"}"
+        },
+        "url": "{{baseUrl}}/auth/login"
+      }
+    },
+    {
+      "name": "Login as bob (user)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\": \"bob\", \"password\": \"bobpass\"}"
+        },
+        "url": "{{baseUrl}}/auth/login"
+      }
+    },
+    {
+      "name": "Current user (JWT)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/auth/me"
+      }
+    },
+    {
+      "name": "Current user (API key)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "X-API-Key", "value": "bob-user-key" }],
+        "url": "{{baseUrl}}/auth/me"
+      }
+    },
+    {
+      "name": "List orders (JWT)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/orders"
+      }
+    },
+    {
+      "name": "Get order by id",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/orders/ord_1001"
+      }
+    },
+    {
+      "name": "Create order (admin write)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"sku\": \"SKU-WIDGET\", \"qty\": 2}"
+        },
+        "url": "{{baseUrl}}/orders"
+      }
+    },
+    {
+      "name": "List inventory",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/inventory"
+      }
+    },
+    {
+      "name": "Restock inventory (admin write)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"sku\": \"SKU-WIDGET\", \"qty\": 10}"
+        },
+        "url": "{{baseUrl}}/inventory/restock"
+      }
+    },
+    {
+      "name": "List users (admin only)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/users"
+      }
+    },
+    {
+      "name": "RBAC forbidden — bob reads /users",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "X-API-Key", "value": "bob-user-key" }],
+        "url": "{{baseUrl}}/users"
+      }
+    }
+  ]
+}
